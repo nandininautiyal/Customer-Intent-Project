@@ -9,24 +9,29 @@ __pycache__/
 dist/
 build/
 
+# Node / Frontend
+node_modules/
+.eslintcache
+dist-ssr/
+*.local
+
 # Environment
 .env
 
-
+# Data
 data/raw/
 
-
+# Model Artifacts
 reports/artifacts/*.pkl
 reports/artifacts/*.pth
 
-
+# Reports & Visualizations
 reports/*.png
 reports/*.csv
 reports/*.json
 
-
+# IDEs & System
 .vscode/
-
-
+.idea/
 .DS_Store
 Thumbs.db

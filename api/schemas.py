@@ -31,16 +31,23 @@ class SessionInput(BaseModel):
 
 
 class RecommendationDetail(BaseModel):
-    segment: str                  # Cold / Warm / Hot / Convert
-    recommended_action: str       # machine-readable action key
-    reason: str                   # human-readable explanation
-    urgency: str                  # low / medium / high / critical
-    message: str                  # business-facing instruction
+    segment: str
+    recommended_action: str
+    action_label: str
+    reason: str
+    urgency: str
+    message: str
+    confidence_score: float
 
 
 class PredictionResponse(BaseModel):
     will_purchase: bool
     purchase_probability: float
-    confidence: str               # High / Medium / Low
+    confidence: str
     model_used: str = "ensemble"
     recommendation: RecommendationDetail
+
+
+class BanditStatsResponse(BaseModel):
+    action_stats: dict
+    total_predictions: int
