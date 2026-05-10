@@ -1,194 +1,222 @@
-# 🛒 Customer Purchase Intent Engine
+# Customer Purchase Intent Engine
 
-> A production-grade machine learning system that predicts whether an online shopper will make a purchase — and recommends the optimal marketing intervention to convert them.
-
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![XGBoost](https://img.shields.io/badge/XGBoost-2.0.3-orange)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.3.0-red)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green)
-![Docker](https://img.shields.io/badge/Docker-Compose-blue)
+A production-grade machine learning system that predicts whether an online shopper will make a purchase, segments them by intent level, and recommends the optimal marketing intervention — served through a REST API and an interactive React dashboard.
 
 ---
 
-## 📌 Problem Statement
+## What This Project Does
 
-E-commerce platforms lose revenue every day because they treat all visitors the same. A visitor who has spent 15 minutes on product pages with high page values is fundamentally different from someone who bounced after 30 seconds — yet most platforms serve them identical experiences.
+Most e-commerce platforms treat all visitors the same. This system doesn't. Given a single browsing session, it answers three questions:
 
-This system solves that by:
-1. **Predicting** purchase intent in real time (will this session convert?)
-2. **Segmenting** visitors into Cold / Warm / Hot / Convert buckets
-3. **Recommending** the optimal intervention for each segment (discount, urgency nudge, social proof, checkout prompt)
+1. Will this visitor buy? (purchase probability + binary prediction)
+2. Which intent bucket do they fall into? (Cold / Warm / Hot / Convert)
+3. What should we show them right now? (intervention recommendation via a learned bandit model)
+
+The entire pipeline runs from raw session data to a live API response in one command.
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```
-Raw Session Data (UCI)
-        │
-        ▼
-┌───────────────────┐
-│  Feature Engineer  │  ← 7 domain-specific features added
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│   Preprocessing    │  ← StandardScaler + SMOTE (train only)
-└───────────────────┘
-        │
-        ├──────────────────────────────────┐
-        ▼                                  ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  Logistic    │  │   XGBoost    │  │  Neural Net  │
-│  Regression  │  │ (Optuna-tuned│  │  (PyTorch)   │
-│  (Baseline)  │  │  40 trials)  │  │  BatchNorm   │
-└──────────────┘  └──────────────┘  └──────────────┘
-        │                │                  │
-        └────────────────┴──────────────────┘
-                         │
-                         ▼
-              ┌─────────────────────┐
-              │  Stacking Ensemble  │  ← OOF meta-features (5-fold)
-              │  (Meta-Learner:     │  ← Threshold tuning on val set
-              │  Logistic Reg.)     │
-              └─────────────────────┘
-                         │
-              ┌──────────┴───────────┐
-              ▼                      ▼
-    ┌──────────────────┐   ┌──────────────────────┐
-    │  SHAP Explainer  │   │  Intent Recommender  │
-    │  (Why did the    │   │  Cold/Warm/Hot/Convert│
-    │  model decide?)  │   │  + Intervention logic │
-    └──────────────────┘   └──────────────────────┘
-                                     │
-                                     ▼
-                           ┌──────────────────┐
-                           │   FastAPI Server  │
-                           │  POST /predict    │
-                           │  GET  /health     │
-                           └──────────────────┘
+UCI Raw Session Data
+        |
+        v
+Feature Engineering        7 domain-specific features derived from raw columns
+        |
+        v
+Preprocessing              StandardScaler + SMOTE (applied to training set only)
+        |
+   _____|_____
+  |     |     |
+  v     v     v
+Logistic  XGBoost   Neural Net
+Regression (Optuna)  (PyTorch)
+  |     |     |
+  |_____|_____|
+        |
+        v
+Stacking Ensemble          Out-of-fold meta-features across 5 stratified folds
+        |
+   _____|_____
+  |           |
+  v           v
+SHAP          LinUCB Contextual Bandit
+Explainer     Recommender
+              |
+              v
+          FastAPI Server  →  React Dashboard
 ```
 
 ---
 
-## 📊 Model Performance (Out-of-Sample Test Set)
+## Model Performance
 
-| Rank | Model | Accuracy | F1 Score | Precision | Recall | ROC-AUC | PR-AUC | Lift@Top20% |
-|------|-------|----------|----------|-----------|--------|---------|--------|-------------|
-| 1 | **XGBoost** | 0.8913 | 0.6716 | 0.6313 | 0.7173 | **0.9282** | 0.7244 | 0.7775 |
-| 2 | **Ensemble** | **0.8946** | 0.6597 | 0.6597 | 0.6597 | 0.9204 | **0.7249** | **0.7723** |
-| 3 | NeuralNet | 0.8869 | 0.6391 | 0.6317 | 0.6466 | 0.9019 | 0.6881 | 0.7435 |
-| 4 | Logistic | 0.8755 | 0.6279 | 0.5847 | 0.6780 | 0.8966 | 0.6272 | 0.7304 |
+Results on the held-out test set (2,466 sessions, never seen during training):
 
-### Key Findings
+| Model | ROC-AUC | F1 | Precision | Recall | Lift @ Top 20% |
+|---|---|---|---|---|---|
+| XGBoost | 0.928 | 0.672 | 0.631 | 0.717 | 0.777 |
+| Ensemble | 0.920 | 0.660 | 0.660 | 0.660 | 0.772 |
+| Neural Net | 0.902 | 0.639 | 0.632 | 0.647 | 0.744 |
+| Logistic | 0.897 | 0.628 | 0.585 | 0.678 | 0.730 |
 
-- **XGBoost achieves ROC-AUC of 0.928** — at the top end of published results on this dataset (academic papers report 0.88–0.93)
-- **Ensemble has perfectly balanced precision = recall = 0.6597** — a sign of well-calibrated predictions from OOF stacking
-- **Lift@Top20% of 0.777** — targeting the top 20% of predicted buyers captures **77.7% of all actual purchases**, directly translating to marketing ROI
-- **SMOTE + threshold tuning** resolved the class imbalance problem (15.5% buyers vs 84.5% non-buyers)
+**XGBoost** achieves the highest AUC at 0.928, which sits at the top end of published academic results on this dataset (typical range: 0.88 to 0.93).
+
+**Ensemble** is deployed in the API. Its precision equals its recall at 0.660 — a sign of well-calibrated predictions, which is more important than raw accuracy when the goal is actionable scoring.
+
+**Lift @ Top 20%** of 0.777 means: if you target only the top 20% of sessions by predicted probability, you capture 77.7% of all actual buyers. That is the core business value of the system.
 
 ---
 
-## 🔬 What Makes This Production-Grade
+## Dataset
 
-| Standard ML Project | This Project |
+**UCI Online Shoppers Purchasing Intention Dataset**
+
+- Source: UCI Machine Learning Repository
+- Link: https://archive.ics.uci.edu/dataset/468/online+shoppers+purchasing+intention+dataset
+- 12,330 browsing sessions collected from an online retail platform
+- 18 raw features covering page categories, durations, bounce/exit rates, traffic type, visitor type, and temporal signals
+- Binary target: Revenue (True = purchase completed)
+- Class distribution: 15.5% positive (buyers), 84.5% negative — handled via SMOTE
+
+### Engineered Features
+
+Seven additional features are derived before training. All are interpretable and business-meaningful:
+
+| Feature | Definition |
 |---|---|
-| Single model in a notebook | 4 models + stacking ensemble, fully modular |
-| Fixed 0.5 threshold | F1-optimal threshold tuning per model |
-| No class imbalance handling | SMOTE on training set only (no leakage) |
-| Accuracy as the only metric | ROC-AUC, PR-AUC, F1, Precision, Recall, Lift@20% |
-| No explainability | SHAP beeswarm + bar plots |
-| No deployment | FastAPI inference server + Docker Compose |
-| Predict only | Predict + segment + recommend intervention |
+| TotalPages | Sum of administrative, informational, and product-related pages visited |
+| TotalDuration | Total time spent across all page categories |
+| ProductPageRatio | Product pages as a fraction of total pages |
+| AvgTimePerPage | Total duration divided by total pages (engagement depth) |
+| HighPageValue | Binary flag: PageValues in the top 25th percentile |
+| NearSpecialDay | Binary flag: SpecialDay > 0 |
+| ExitBounceRisk | BounceRates + ExitRates combined abandonment score |
 
 ---
 
-## 📁 Repository Structure
+## Models
+
+### Logistic Regression
+Standard L2-regularised logistic regression with class_weight=balanced. Serves as an interpretable baseline. F1-optimal threshold tuned on the validation set post-training.
+
+### XGBoost
+Gradient-boosted decision trees tuned with Optuna over 40 trials, optimising F1 score on the validation set. Tuned hyperparameters: n_estimators, max_depth, learning_rate, subsample, colsample_bytree, reg_alpha, reg_lambda, gamma, min_child_weight. F1-optimal threshold tuned post-training.
+
+### Neural Network
+Three-block feedforward network built in PyTorch: 24 → 256 → 128 → 64 → 1. Each block uses BatchNorm1d and Dropout. Trained with BCEWithLogitsLoss and a positive class weight to handle imbalance. CosineAnnealingLR scheduler. Best checkpoint restored after training. F1-optimal threshold tuned on validation set.
+
+### Stacking Ensemble
+A two-layer stacking architecture. In the first layer, each base model generates out-of-fold predictions across 5 stratified folds — this ensures the meta-learner never trains on predictions from data the base models themselves saw. In the second layer, a logistic regression meta-learner is trained on these OOF probability outputs. Threshold tuned on the clean validation set. This is the model deployed in the API.
+
+### LinUCB Contextual Bandit Recommender
+Replaces a static rule-based system. For each of 8 possible marketing actions, the bandit maintains a weight matrix updated with every prediction. At inference it selects the action with the highest Upper Confidence Bound — balancing exploitation of known-good actions with exploration of uncertain ones. Uses 6 session features as context: purchase probability, exit/bounce risk, page value, product page ratio, visitor type, and proximity to special day. Warm-started with 2,000 simulated interactions before first deployment.
+
+---
+
+## Repository Structure
 
 ```
 customer-intent-engine/
-│
-├── docker-compose.yml              ← Spins up app + PostgreSQL
-├── Dockerfile
-├── requirements.txt
-├── .env.example
-├── orchestrator.py                 ← Master run script
-│
-├── data/
-│   └── raw/
-│       └── online_shoppers_intention.csv
-│
-├── pipeline/
-│   ├── __init__.py
-│   ├── ingest.py                   ← Loads + validates UCI dataset
-│   ├── preprocess.py               ← Encoding, scaling, SMOTE
-│   ├── features.py                 ← 7 engineered features
-│   └── segments.py                 ← Cold/Warm/Hot/Convert segmentation
-│
-├── models/
-│   ├── __init__.py
-│   ├── base_model.py               ← Abstract interface for all models
-│   ├── logistic_model.py           ← L2 logistic baseline
-│   ├── xgboost_model.py            ← Optuna-tuned XGBoost
-│   ├── neural_model.py             ← PyTorch net (BatchNorm + Dropout)
-│   ├── ensemble_model.py           ← OOF stacking meta-learner
-│   └── recommender.py              ← Rule-based intervention engine
-│
-├── evaluation/
-│   ├── __init__.py
-│   ├── metrics.py                  ← Scoring logic + business lift metric
-│   ├── shap_explainer.py           ← SHAP summary + beeswarm plots
-│   └── reporter.py                 ← ROC, PR, confusion matrix, bar charts
-│
-├── api/
-│   ├── __init__.py
-│   ├── main.py                     ← FastAPI app
-│   └── schemas.py                  ← Pydantic input/output schemas
-│
-└── reports/                        ← Auto-generated (gitignored)
-    ├── artifacts/                  ← Saved model weights + scalers
-    ├── roc_curves.png
-    ├── pr_curves.png
-    ├── confusion_matrices.png
-    ├── metrics_comparison.png
-    ├── shap_summary_bar.png
-    ├── shap_summary_beeswarm.png
-    ├── model_comparison_metrics.csv
-    └── model_comparison_metrics.json
+|
+|-- orchestrator.py              Master pipeline script
+|-- docker-compose.yml
+|-- Dockerfile
+|-- requirements.txt
+|-- .env.example
+|
+|-- data/
+|   |-- raw/
+|       |-- online_shoppers_intention.csv
+|
+|-- pipeline/
+|   |-- ingest.py                Schema validation and loading
+|   |-- features.py              Feature engineering
+|   |-- preprocess.py            Encoding, scaling, SMOTE
+|   |-- segments.py              Cold/Warm/Hot/Convert segmentation
+|
+|-- models/
+|   |-- base_model.py            Abstract interface
+|   |-- logistic_model.py
+|   |-- xgboost_model.py
+|   |-- neural_model.py
+|   |-- ensemble_model.py
+|   |-- bandit_recommender.py    LinUCB contextual bandit
+|   |-- recommender.py           Bandit wrapper with action labels
+|
+|-- evaluation/
+|   |-- metrics.py               Scoring + business lift metric
+|   |-- shap_explainer.py        SHAP summary and beeswarm plots
+|   |-- reporter.py              ROC, PR, confusion matrix, bar charts
+|
+|-- api/
+|   |-- main.py                  FastAPI application
+|   |-- schemas.py               Pydantic request/response schemas
+|
+|-- frontend/
+|   |-- index.html
+|   |-- vite.config.js
+|   |-- package.json
+|   |-- src/
+|       |-- App.jsx
+|       |-- main.jsx
+|       |-- index.css
+|       |-- components/
+|           |-- PredictForm.jsx
+|           |-- ResultCard.jsx
+|           |-- MetricsDashboard.jsx
+|
+|-- reports/                     Auto-generated on pipeline run
+    |-- artifacts/               Saved model weights and scalers
+    |-- roc_curves.png
+    |-- pr_curves.png
+    |-- confusion_matrices.png
+    |-- metrics_comparison.png
+    |-- shap_summary_bar.png
+    |-- shap_summary_beeswarm.png
+    |-- model_comparison_metrics.csv
+    |-- model_comparison_metrics.json
 ```
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
-### Option 1: Local (Recommended)
+### Local setup
 
 ```bash
-# 1. Clone the repo
+# 1. Clone
 git clone https://github.com/YOUR_USERNAME/customer-intent-engine.git
 cd customer-intent-engine
 
-# 2. Create virtual environment
+# 2. Python environment
 python -m venv venv
 venv\Scripts\activate        # Windows
-# source venv/bin/activate   # Mac/Linux
+source venv/bin/activate     # Mac / Linux
 
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Place the dataset
-# Download: https://archive.ics.uci.edu/dataset/468/online+shoppers+purchasing+intention+dataset
-# Save as:  data/raw/online_shoppers_intention.csv
+# 4. Place dataset
+# Download from the UCI link above
+# Save as: data/raw/online_shoppers_intention.csv
 
-# 5. Run the full pipeline
+# 5. Run the full training pipeline
 python orchestrator.py
+# Trains all models, evaluates on test set, saves artifacts, generates reports
 
-# 6. Launch the inference API
+# 6. Start the API (Terminal 1)
 uvicorn api.main:app --reload
-# → http://localhost:8000/docs
+
+# 7. Start the frontend (Terminal 2)
+cd frontend
+npm install
+npm run dev
+# Open http://localhost:5173
 ```
 
-### Option 2: Docker
+### Docker
 
 ```bash
 cp .env.example .env
@@ -199,153 +227,134 @@ docker exec -it intent-app python orchestrator.py
 
 ---
 
-## 📦 Dataset
+## API Reference
 
-**UCI Online Shoppers Purchasing Intention Dataset**
+Base URL: `http://localhost:8000`
 
-| Property | Value |
-|---|---|
-| Source | UCI Machine Learning Repository |
-| Link | https://archive.ics.uci.edu/dataset/468 |
-| Sessions | 12,330 |
-| Raw Features | 18 |
-| Engineered Features | 7 |
-| Total Features Used | 24 |
-| Target | `Revenue` (True = purchase made) |
-| Class Balance | 15.5% positive (buyers), 84.5% negative |
+### POST /predict
 
-### Engineered Features
+Accepts a session feature object. Returns purchase probability, segment, and recommended intervention.
 
-| Feature | Formula | Business Meaning |
-|---|---|---|
-| `TotalPages` | Admin + Info + ProductRelated | Overall browsing depth |
-| `TotalDuration` | Sum of all durations | Total time investment in session |
-| `ProductPageRatio` | ProductRelated / TotalPages | Focus on product vs other pages |
-| `AvgTimePerPage` | TotalDuration / TotalPages | Engagement depth per page |
-| `HighPageValue` | PageValues ≥ 75th percentile | Binary flag for strong purchase signal |
-| `NearSpecialDay` | SpecialDay > 0 | Seasonal urgency context |
-| `ExitBounceRisk` | BounceRates + ExitRates | Combined abandonment risk score |
-
----
-
-## 🤖 Model Details
-
-### Logistic Regression (Baseline)
-- L2 regularization, `class_weight=balanced`
-- F1-optimal threshold tuning on validation set
-- Purpose: interpretable lower bound for comparison
-
-### XGBoost (Best Single Model — AUC 0.928)
-- **Optuna hyperparameter search**: 40 trials optimizing F1
-- Tuned params: n_estimators, max_depth, learning_rate, subsample, colsample_bytree, reg_alpha, reg_lambda, gamma, min_child_weight
-- F1-optimal threshold tuning post-training
-
-### Neural Network (PyTorch)
-- Architecture: 24 → 256 → 128 → 64 → 1
-- BatchNorm1d + Dropout at every layer
-- BCEWithLogitsLoss with positive class weighting
-- CosineAnnealingLR scheduler
-- Best-epoch checkpointing via validation loss
-- F1-optimal threshold tuning post-training
-
-### Stacking Ensemble
-- **Out-of-fold (OOF) meta-feature generation** — 5 stratified folds
-- Zero data leakage: meta-learner trains on predictions from data the base models never saw
-- Meta-learner: Logistic Regression with `class_weight=balanced`
-- Threshold tuned on clean held-out validation set
-- Result: precision = recall = 0.6597 (well-calibrated)
-
----
-
-## 🎯 Recommendation Engine
-
-The system doesn't just predict — it tells you what action to take:
+Request body (key fields):
 
 ```json
 {
-  "will_purchase": false,
-  "purchase_probability": 0.43,
-  "confidence": "Medium",
+  "ProductRelated": 12,
+  "ProductRelated_Duration": 720.0,
+  "PageValues": 25.3,
+  "BounceRates": 0.02,
+  "ExitRates": 0.04,
+  "Month": 11,
+  "VisitorType": 2,
+  "Weekend": 0,
+  "Administrative": 2,
+  "Administrative_Duration": 80.0,
+  "Informational": 0,
+  "Informational_Duration": 0.0,
+  "SpecialDay": 0.0,
+  "OperatingSystems": 2,
+  "Browser": 2,
+  "Region": 1,
+  "TrafficType": 2,
+  "ProductPageRatio": 0.8,
+  "ExitBounceRisk": 0.06,
+  "NearSpecialDay": 0,
+  "HighPageValue": 1,
+  "TotalPages": 14,
+  "TotalDuration": 800.0,
+  "AvgTimePerPage": 57.1
+}
+```
+
+Response:
+
+```json
+{
+  "will_purchase": true,
+  "purchase_probability": 0.7823,
+  "confidence": "High",
   "model_used": "ensemble",
   "recommendation": {
-    "segment": "Warm",
-    "recommended_action": "show_exit_intent_offer",
-    "reason": "High exit risk detected — trigger exit-intent popup with discount.",
-    "urgency": "medium",
-    "message": "Offer a time-limited discount or free shipping nudge."
+    "segment": "Convert",
+    "recommended_action": "show_returning_visitor_offer",
+    "action_label": "Returning Visitor Loyalty Reward",
+    "reason": "Returning visitor with high page value — offer loyalty reward or saved cart reminder.",
+    "urgency": "critical",
+    "message": "Surface a direct CTA — streamline path to checkout immediately.",
+    "confidence_score": 2.341
   }
 }
 ```
 
-### Segments and Intervention Logic
-
-| Segment | Probability | Default Action | Contextual Overrides |
-|---|---|---|---|
-| **Cold** | 0.00 – 0.30 | Social proof (reviews, ratings) | New visitor → trust badges |
-| **Warm** | 0.30 – 0.55 | Discount offer | High exit risk → exit-intent popup |
-| **Hot** | 0.55 – 0.75 | Urgency nudge (low stock) | Near special day → seasonal offer |
-| **Convert** | 0.75 – 1.00 | Direct checkout CTA | Returning + high PageValues → loyalty reward |
-
----
-
-## 🔍 SHAP Explainability
-
-Top drivers of purchase intent from SHAP analysis:
-
-1. **PageValues** — strongest signal. High-value product page sessions are serious buyers
-2. **Month** — strong seasonality. November/December sessions convert at higher rates
-3. **ProductPageRatio** — engineered feature. High ratio = focused product browsing
-4. **ExitRates** — high exit rate strongly predicts abandonment
-5. **Administrative** — time on account pages signals an engaged, returning user
-
-SHAP plots auto-generated in `reports/` after every pipeline run.
-
----
-
-## 🌐 API Reference
+### Other endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/predict` | Purchase probability + recommendation |
-| `GET` | `/health` | Model load status |
-| `GET` | `/model-info` | Architecture summary |
-| `GET` | `/segment-stats` | Distribution across segments |
-| `GET` | `/docs` | Swagger UI |
+| GET | /health | API and model status |
+| GET | /model-info | Architecture summary |
+| GET | /segment-stats | Live segment distribution |
+| GET | /bandit-stats | Bandit action counts and average rewards |
+| GET | /recent-predictions | Last 20 predictions logged in memory |
+| GET | /docs | Swagger UI |
 
 ---
 
-## 🛠️ Tech Stack
+## Recommendation System
 
-| Layer | Technology |
+The bandit recommender maps each session to one of 8 actions:
+
+| Action | Trigger Condition |
 |---|---|
-| ML Models | scikit-learn, XGBoost, PyTorch |
-| Hyperparameter Tuning | Optuna (40 trials) |
-| Class Imbalance | imbalanced-learn (SMOTE) |
+| show_social_proof | Cold segment, new visitor |
+| show_discount | Warm segment baseline |
+| show_urgency | Hot segment baseline |
+| show_checkout_prompt | Convert segment baseline |
+| show_exit_intent_offer | High exit/bounce risk on Warm or Hot |
+| show_seasonal_urgency | Near a special day |
+| show_returning_visitor_offer | Returning visitor with high PageValues |
+| show_product_recommendation | High engagement but low product focus |
+
+Unlike a static rule system, the bandit updates its action weights after every prediction. Actions that correlate with higher purchase probability receive stronger reinforcement over time.
+
+---
+
+## SHAP Analysis
+
+The SHAP beeswarm plot identifies the top drivers of purchase prediction:
+
+- **PageValues** is the strongest single feature. Sessions with high page values (high-priced product pages) push predictions strongly toward purchase.
+- **Month** captures strong seasonality. November and December sessions behave differently from the rest of the year.
+- **ProductPageRatio** is the most impactful engineered feature. A high ratio of product pages to total pages signals focused buying intent.
+- **ExitRates** and **ExitBounceRisk** push predictions toward non-purchase when elevated.
+- **Administrative** pages signal engaged, returning users when combined with other high-intent features.
+
+SHAP plots are saved to `reports/` automatically after every pipeline run.
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|---|---|
+| ML training | scikit-learn, XGBoost, PyTorch |
+| Hyperparameter tuning | Optuna |
+| Class imbalance | imbalanced-learn (SMOTE) |
 | Explainability | SHAP |
-| API Layer | FastAPI + Pydantic v2 |
-| Visualization | Matplotlib, Seaborn |
-| Database | PostgreSQL (Docker) |
-| Containerization | Docker + Docker Compose |
+| Recommender | Custom LinUCB implementation |
+| API | FastAPI, Pydantic v2, Uvicorn |
+| Frontend | React 18, Vite, Recharts |
+| Visualisation | Matplotlib, Seaborn |
+| Containerisation | Docker, Docker Compose |
 | Logging | Loguru |
 
 ---
 
-## 📈 Business Impact
+## Business Interpretation
 
-> Targeting the top 20% of sessions by predicted purchase probability captures **77.7% of all actual purchases.**
+The Lift @ Top 20% metric is the most direct measure of business value. It answers: if you act on only the top-scored 20% of sessions, what fraction of actual buyers do you reach?
 
-This means a marketing team using this system can:
-- Send personalized offers to **20% of visitors** and reach **77.7% of buyers**
-- Reduce wasted marketing spend by ~80% vs blanket campaigns
-- Personalize on-site experience in real time via the `/predict` API
-- Act on contextual signals (exit risk, visitor type, seasonality) rather than static rules
+At 0.777, the system captures 77.7% of buyers by targeting 20% of traffic. A random targeting strategy would capture 20%. This represents a 3.9x improvement over baseline, which directly translates to reduced marketing spend per conversion.
 
 
 ---
 
-## 📄 Dataset Citation
-
-Sakar, C.O., Polat, S.O., Katircioglu, M. et al.
-*Real-time prediction of online shoppers' purchasing intention using multilayer perceptron and LSTM recurrent neural networks.*
-Neural Comput & Applic 31, 6893–6908 (2019).
-https://doi.org/10.1007/s00521-018-3523-0
