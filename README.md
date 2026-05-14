@@ -1,6 +1,6 @@
 # Customer Purchase Intent Engine
 
-A production-grade machine learning system that predicts whether an online shopper will make a purchase, segments them by intent level, and recommends the optimal marketing intervention — served through a REST API and an interactive React dashboard.
+A machine learning system that predicts whether an online shopper will make a purchase, segments them by intent level, and recommends the optimal marketing intervention — served through a REST API and an interactive React dashboard.
 
 ---
 
@@ -11,8 +11,6 @@ Most e-commerce platforms treat all visitors the same. This system doesn't. Give
 1. Will this visitor buy? (purchase probability + binary prediction)
 2. Which intent bucket do they fall into? (Cold / Warm / Hot / Convert)
 3. What should we show them right now? (intervention recommendation via a learned bandit model)
-
-The entire pipeline runs from raw session data to a live API response in one command.
 
 ---
 
