@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from imblearn.over_sampling import SMOTE
+from imblearn.combine import SMOTETomek
 from loguru import logger
 import joblib
 from pathlib import Path
@@ -17,7 +17,10 @@ def preprocess(df: pd.DataFrame):
     Full preprocessing pipeline:
     - Encodes categoricals
     - Scales numerics
-    - Applies SMOTE on training set only to fix class imbalance
+    - Applies SMOTETomek on training set only:
+        SMOTE oversamples minority class synthetically
+        Tomek Links removes borderline noisy samples
+        Together they oversample AND clean the decision boundary
     - Splits into train/val/test (60/20/20)
 
     Returns:
@@ -52,7 +55,10 @@ def preprocess(df: pd.DataFrame):
     feature_names = features
 
     logger.info(f"Features: {len(feature_names)} | Target: '{target}'")
-    logger.info(f"Class balance before SMOTE — Buy: {y.sum()} | No Buy: {(y==0).sum()}")
+    logger.info(
+        f"Class balance before resampling — "
+        f"Buy: {y.sum()} | No Buy: {(y == 0).sum()}"
+    )
 
     # --- Train / Val / Test split (60/20/20) ---
     X_train, X_temp, y_train, y_temp = train_test_split(
@@ -62,9 +68,11 @@ def preprocess(df: pd.DataFrame):
         X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
     )
 
-    logger.info(f"Split — Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
+    logger.info(
+        f"Split — Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}"
+    )
 
-    # --- Scale BEFORE SMOTE  ---
+    # --- Scale BEFORE resampling (fit only on train) ---
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled   = scaler.transform(X_val)
@@ -73,13 +81,14 @@ def preprocess(df: pd.DataFrame):
     joblib.dump(scaler, ARTIFACTS_DIR / "scaler.pkl")
     logger.info("Scaler saved.")
 
-    # --- SMOTE on training set only ---
-    # CRITICAL: never apply SMOTE to val or test — that would be data leakage
-    smote = SMOTE(random_state=42, k_neighbors=5)
-    X_train_bal, y_train_bal = smote.fit_resample(X_train_scaled, y_train)
+    # --- SMOTETomek on training set only ---
+    # CRITICAL: never apply to val or test — that is data leakage
+    smt = SMOTETomek(random_state=42)
+    X_train_bal, y_train_bal = smt.fit_resample(X_train_scaled, y_train)
 
     logger.info(
-        f"After SMOTE — Buy: {y_train_bal.sum()} | "
+        f"After SMOTETomek — "
+        f"Buy: {y_train_bal.sum()} | "
         f"No Buy: {(y_train_bal == 0).sum()} | "
         f"Total: {len(y_train_bal)}"
     )

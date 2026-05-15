@@ -9,8 +9,9 @@ from models.base_model import BaseIntentModel
 
 class IntentNet(nn.Module):
     """
-    Deeper network with residual connection between block1 and block3
-    for better gradient flow on tabular data.
+    3-layer feedforward network with BatchNorm and Dropout.
+    BatchNorm requires batch size > 1 — enforced via drop_last=True
+    in the DataLoader.
     """
 
     def __init__(self, input_dim: int):
@@ -47,76 +48,130 @@ class NeuralIntentModel(BaseIntentModel):
     """
     PyTorch neural network with:
     - Weighted BCE loss for class imbalance
-    - Cosine annealing LR scheduler
+    - CosineAnnealingLR scheduler
     - Best model checkpointing
-    - Automatic threshold tuning post-training
+    - Automatic F1-optimal threshold tuning post-training
+    - drop_last=True on train DataLoader to prevent
+      single-sample batches crashing BatchNorm1d
     """
 
     def __init__(
         self,
-        input_dim: int,
-        epochs: int = 60,
-        lr: float = 1e-3,
-        batch_size: int = 256
+        input_dim:  int,
+        epochs:     int   = 60,
+        lr:         float = 1e-3,
+        batch_size: int   = 256
     ):
-        self.input_dim = input_dim
-        self.epochs = epochs
-        self.lr = lr
+        self.input_dim  = input_dim
+        self.epochs     = epochs
+        self.lr         = lr
         self.batch_size = batch_size
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = IntentNet(input_dim).to(self.device)
+        self.device     = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        self.model             = IntentNet(input_dim).to(self.device)
         self.optimal_threshold = 0.5
         logger.info(f"[NeuralNet] Device: {self.device}")
 
-    def _get_loader(self, X, y, shuffle=True):
-        X_t = torch.FloatTensor(X).to(self.device)
-        y_t = torch.FloatTensor(y).to(self.device)
-        return DataLoader(TensorDataset(X_t, y_t), batch_size=self.batch_size, shuffle=shuffle)
+    def _get_loader(
+        self,
+        X:        np.ndarray,
+        y:        np.ndarray,
+        shuffle:  bool = True,
+        drop_last: bool = False
+    ) -> DataLoader:
+        """
+        Builds a DataLoader from numpy arrays.
 
-    def _tune_threshold(self, X_val: np.ndarray, y_val: np.ndarray) -> float:
-        """Finds F1-optimal threshold on validation set."""
-        probas = self._raw_probas(X_val)
-        best_thresh, best_f1 = 0.5, 0.0
+        drop_last=True on training loader prevents the last batch
+        from having size 1, which crashes BatchNorm1d.
+        drop_last=False on val/test loaders — we want all samples.
+        """
+        X_t = torch.FloatTensor(np.array(X)).to(self.device)
+        y_t = torch.FloatTensor(np.array(y)).to(self.device)
+        dataset = TensorDataset(X_t, y_t)
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            drop_last=drop_last
+        )
+
+    def _tune_threshold(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray
+    ) -> float:
+        """Finds the F1-optimal threshold on the validation set."""
+        probas      = self._raw_probas(X_val)
+        best_thresh = 0.5
+        best_f1     = 0.0
 
         for thresh in np.arange(0.20, 0.81, 0.01):
             preds = (probas >= thresh).astype(int)
             score = f1_score(y_val, preds, zero_division=0)
             if score > best_f1:
-                best_f1 = score
+                best_f1     = score
                 best_thresh = thresh
 
-        logger.info(f"[NeuralNet] Optimal threshold: {best_thresh:.2f} → F1: {best_f1:.4f}")
+        logger.info(
+            f"[NeuralNet] Optimal threshold: {best_thresh:.2f} "
+            f"→ F1: {best_f1:.4f}"
+        )
         return float(best_thresh)
 
-    def train(self, X_train, y_train, X_val, y_val):
-        # Class weight from TRAINING set distribution
+    def train(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val:   np.ndarray,
+        y_val:   np.ndarray
+    ) -> None:
+        y_train = np.array(y_train)
+        y_val   = np.array(y_val)
+
+        # Positive class weight from training distribution
         pos_weight = torch.tensor(
             [(y_train == 0).sum() / max((y_train == 1).sum(), 1)]
         ).to(self.device)
 
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         optimizer = torch.optim.AdamW(
-            self.model.parameters(), lr=self.lr, weight_decay=1e-4
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=1e-4
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=self.epochs, eta_min=1e-5
         )
 
-        train_loader = self._get_loader(X_train, y_train, shuffle=True)
-        val_loader   = self._get_loader(X_val, y_val, shuffle=False)
+        # drop_last=True on train loader — prevents batch size 1
+        # hitting BatchNorm1d during OOF fold training
+        train_loader = self._get_loader(
+            X_train, y_train, shuffle=True, drop_last=True
+        )
+        val_loader = self._get_loader(
+            X_val, y_val, shuffle=False, drop_last=False
+        )
 
         best_val_loss = float("inf")
-        best_state = None
+        best_state    = None
 
         for epoch in range(self.epochs):
+
             # --- Train ---
             self.model.train()
             for X_batch, y_batch in train_loader:
                 optimizer.zero_grad()
                 logits = self.model(X_batch).squeeze()
+                # squeeze() on a batch of 1 returns a scalar — guard it
+                if logits.dim() == 0:
+                    logits = logits.unsqueeze(0)
                 loss = criterion(logits, y_batch)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(
+                    self.model.parameters(), max_norm=1.0
+                )
                 optimizer.step()
 
             scheduler.step()
@@ -127,30 +182,38 @@ class NeuralIntentModel(BaseIntentModel):
             with torch.no_grad():
                 for X_batch, y_batch in val_loader:
                     logits = self.model(X_batch).squeeze()
+                    if logits.dim() == 0:
+                        logits = logits.unsqueeze(0)
                     val_loss += criterion(logits, y_batch).item()
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                best_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+                best_state    = {
+                    k: v.clone()
+                    for k, v in self.model.state_dict().items()
+                }
 
             if (epoch + 1) % 10 == 0:
                 logger.info(
-                    f"[NeuralNet] Epoch {epoch+1}/{self.epochs} | Val Loss: {val_loss:.4f}"
+                    f"[NeuralNet] Epoch {epoch+1}/{self.epochs} "
+                    f"| Val Loss: {val_loss:.4f}"
                 )
 
         # Restore best checkpoint
         self.model.load_state_dict(best_state)
         logger.info("[NeuralNet] Best checkpoint restored.")
 
-        # Tune threshold on val set
+        # Tune decision threshold on validation set
         self.optimal_threshold = self._tune_threshold(X_val, y_val)
 
     def _raw_probas(self, X: np.ndarray) -> np.ndarray:
-        """Returns raw sigmoid probabilities without threshold."""
+        """Returns raw sigmoid probabilities without applying threshold."""
         self.model.eval()
-        X_t = torch.FloatTensor(X).to(self.device)
+        X_t = torch.FloatTensor(np.array(X)).to(self.device)
         with torch.no_grad():
             logits = self.model(X_t).squeeze()
+            if logits.dim() == 0:
+                logits = logits.unsqueeze(0)
             probs = torch.sigmoid(logits).cpu().numpy()
         return probs
 
@@ -162,7 +225,10 @@ class NeuralIntentModel(BaseIntentModel):
 
     def save(self, path: str) -> None:
         torch.save(
-            {"weights": self.model.state_dict(), "threshold": self.optimal_threshold},
+            {
+                "weights":   self.model.state_dict(),
+                "threshold": self.optimal_threshold
+            },
             path
         )
         logger.info(f"[NeuralNet] Saved to {path}")
@@ -171,4 +237,6 @@ class NeuralIntentModel(BaseIntentModel):
         data = torch.load(path, map_location=self.device)
         self.model.load_state_dict(data["weights"])
         self.optimal_threshold = data.get("threshold", 0.5)
-        logger.info(f"[NeuralNet] Loaded. Threshold: {self.optimal_threshold:.2f}")
+        logger.info(
+            f"[NeuralNet] Loaded. Threshold: {self.optimal_threshold:.2f}"
+        )

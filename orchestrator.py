@@ -2,12 +2,12 @@
 Master orchestrator — runs the full pipeline end to end:
     1. Ingest raw data
     2. Engineer features
-    3. Preprocess & split (with SMOTE)
-    4. Train all base models (with tuning + threshold optimization)
-    5. Train stacking ensemble (OOF meta-features)
-    6. Evaluate on test set
-    7. Generate all reports + SHAP plots
-    8. Save all model artifacts
+    3. Preprocess + split (SMOTETomek on train only)
+    4. Train base models (Logistic, XGBoost with 80 Optuna trials, NeuralNet)
+    5. Train stacking ensemble (OOF + XGBoost meta-learner)
+    6. Evaluate all models on held-out test set
+    7. Generate reports (ROC, PR, confusion matrices, SHAP)
+    8. Save all artifacts
 """
 
 from pathlib import Path
@@ -42,12 +42,12 @@ def run():
     # --- 2. Feature Engineering ---
     df = engineer_features(df)
 
-    # --- 3. Preprocess (returns numpy arrays, SMOTE applied on train only) ---
+    # --- 3. Preprocess ---
     (X_train, X_val, X_test,
      y_train, y_val, y_test,
      feature_names) = preprocess(df)
 
-    # Guarantee numpy arrays throughout (defensive cast)
+    # Guarantee numpy arrays throughout
     X_train = np.array(X_train)
     X_val   = np.array(X_val)
     X_test  = np.array(X_test)
@@ -57,7 +57,11 @@ def run():
 
     input_dim = X_train.shape[1]
     logger.info(f"Input dimension: {input_dim}")
-    logger.info(f"Train: {X_train.shape} | Val: {X_val.shape} | Test: {X_test.shape}")
+    logger.info(
+        f"Train: {X_train.shape} | "
+        f"Val: {X_val.shape} | "
+        f"Test: {X_test.shape}"
+    )
 
     # --- 4. Train base models ---
     logger.info("-" * 40)
@@ -67,27 +71,27 @@ def run():
     logistic.save(str(ARTIFACTS_DIR / "logistic.pkl"))
 
     logger.info("-" * 40)
-    logger.info("Training XGBoost (Optuna tuning)...")
-    xgb = XGBoostIntentModel(tune=True, n_trials=40)
+    logger.info("Training XGBoost (80 Optuna trials)...")
+    xgb = XGBoostIntentModel(tune=True, n_trials=80)
     xgb.train(X_train, y_train, X_val, y_val)
     xgb.save(str(ARTIFACTS_DIR / "xgboost.pkl"))
 
     logger.info("-" * 40)
     logger.info("Training Neural Network...")
-    neural = NeuralIntentModel(input_dim=input_dim, epochs=50)
+    neural = NeuralIntentModel(input_dim=input_dim, epochs=60)
     neural.train(X_train, y_train, X_val, y_val)
     neural.save(str(ARTIFACTS_DIR / "neural.pth"))
 
-    # --- 5. Train stacking ensemble (OOF) ---
+    # --- 5. Train stacking ensemble ---
     logger.info("-" * 40)
-    logger.info("Training Stacking Ensemble (OOF)...")
+    logger.info("Training Stacking Ensemble (OOF + XGBoost meta-learner)...")
     ensemble = EnsembleIntentModel([logistic, xgb, neural])
     ensemble.train(X_train, y_train, X_val, y_val)
     ensemble.save(str(ARTIFACTS_DIR / "ensemble_meta.pkl"))
 
-    # --- 6. Evaluate all models on held-out test set ---
+    # --- 6. Evaluate on test set ---
     logger.info("-" * 40)
-    logger.info("Evaluating on test set...")
+    logger.info("Evaluating all models on held-out test set...")
 
     model_map = {
         "Logistic":  logistic,
@@ -102,8 +106,7 @@ def run():
     for name, model in model_map.items():
         pred  = model.predict(X_test)
         proba = model.predict_proba(X_test)
-        m = compute_all_metrics(y_test, pred, proba, name)
-        # Store pred/proba for plotting but not in CSV
+        m     = compute_all_metrics(y_test, pred, proba, name)
         results.append({**m, "pred": pred, "proba": proba})
         metrics_list.append({k: v for k, v in m.items()})
 
