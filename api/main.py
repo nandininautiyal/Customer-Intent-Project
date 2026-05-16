@@ -23,10 +23,9 @@ app = FastAPI(
     version="3.0.0"
 )
 
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,7 +33,7 @@ app.add_middleware(
 
 ARTIFACTS    = Path("reports/artifacts")
 FRONTEND_DIR = Path("frontend/dist")
-models_loaded = {}
+models_loaded  = {}
 prediction_log = []
 
 
@@ -78,8 +77,6 @@ def load_models():
     except Exception as e:
         logger.error(f"Model loading failed: {e}")
         raise
-
-
 
 
 @app.get("/health")
@@ -190,8 +187,7 @@ def model_info():
     }
 
 
-
-
+# Serve React frontend — must be after all API routes
 if FRONTEND_DIR.exists():
     app.mount(
         "/assets",
@@ -205,11 +201,6 @@ if FRONTEND_DIR.exists():
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
-        """
-        Catch-all route for React Router.
-        Any path that isn't an API route returns index.html
-        so React handles the routing client-side.
-        """
         file_path = FRONTEND_DIR / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
