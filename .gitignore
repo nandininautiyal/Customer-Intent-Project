@@ -41,3 +41,4 @@ Thumbs.db
 *.png
 *.jpg
 notebooks/
+upload_data.py
