@@ -1,6 +1,6 @@
-﻿---
+---
 title: Customer Intent Engine
-emoji: "🧠"
+emoji: 🧠
 colorFrom: blue
 colorTo: purple
 sdk: static
