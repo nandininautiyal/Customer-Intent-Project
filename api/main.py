@@ -39,8 +39,31 @@ prediction_log = []
 
 @app.on_event("startup")
 def load_models():
+    """
+    Loads all trained models at startup.
+    Does NOT raise on failure — server starts regardless so
+    /health always responds. /predict returns 503 if models
+    are not loaded.
+    """
     try:
-        scaler = joblib.load(ARTIFACTS / "scaler.pkl")
+        if not ARTIFACTS.exists():
+            logger.warning(
+                "Artifacts directory not found. "
+                "Run orchestrator.py first to train models."
+            )
+            return
+
+        scaler_path = ARTIFACTS / "scaler.pkl"
+        if not scaler_path.exists():
+            logger.warning(
+                "No trained artifacts found. "
+                "Training pipeline may not have run yet."
+            )
+            return
+
+        logger.info("Loading models from artifacts...")
+
+        scaler = joblib.load(scaler_path)
         models_loaded["scaler"] = scaler
 
         logistic = LogisticIntentModel()
@@ -76,35 +99,51 @@ def load_models():
 
     except Exception as e:
         logger.error(f"Model loading failed: {e}")
-        raise
+        logger.warning(
+            "Server starting without models. "
+            "Check logs above for details."
+        )
+        # Do NOT raise — let server start so /health still responds
 
+
+# ------------------------------------------------------------------
+# API Routes
+# ------------------------------------------------------------------
 
 @app.get("/health")
 def health_check():
     return {
-        "status": "ok",
+        "status":       "ok",
         "models_ready": "ensemble" in models_loaded,
-        "bandit_ready": "bandit" in models_loaded,
+        "bandit_ready": "bandit"   in models_loaded,
     }
 
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(session: SessionInput):
     if "ensemble" not in models_loaded:
-        raise HTTPException(status_code=503, detail="Models not loaded.")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Models not loaded. "
+                "Training pipeline may still be running — "
+                "check /health and try again in a few minutes."
+            )
+        )
 
     feature_array = np.array([[
-        session.Administrative, session.Administrative_Duration,
-        session.Informational, session.Informational_Duration,
-        session.ProductRelated, session.ProductRelated_Duration,
-        session.BounceRates, session.ExitRates, session.PageValues,
-        session.SpecialDay, session.Month, session.OperatingSystems,
-        session.Browser, session.Region, session.TrafficType,
-        session.VisitorType, session.Weekend,
-        session.TotalPages, session.TotalDuration,
-        session.ProductPageRatio, session.AvgTimePerPage,
-        session.HighPageValue, session.NearSpecialDay,
-        session.ExitBounceRisk
+        session.Administrative,          session.Administrative_Duration,
+        session.Informational,           session.Informational_Duration,
+        session.ProductRelated,          session.ProductRelated_Duration,
+        session.BounceRates,             session.ExitRates,
+        session.PageValues,              session.SpecialDay,
+        session.Month,                   session.OperatingSystems,
+        session.Browser,                 session.Region,
+        session.TrafficType,             session.VisitorType,
+        session.Weekend,                 session.TotalPages,
+        session.TotalDuration,           session.ProductPageRatio,
+        session.AvgTimePerPage,          session.HighPageValue,
+        session.NearSpecialDay,          session.ExitBounceRisk,
     ]])
 
     scaler   = models_loaded["scaler"]
@@ -153,7 +192,10 @@ def predict(session: SessionInput):
 @app.get("/bandit-stats", response_model=BanditStatsResponse)
 def bandit_stats():
     if "bandit" not in models_loaded:
-        raise HTTPException(status_code=503, detail="Bandit not loaded.")
+        raise HTTPException(
+            status_code=503,
+            detail="Bandit not loaded."
+        )
     bandit = models_loaded["bandit"]
     return BanditStatsResponse(
         action_stats=bandit.get_action_stats(),
@@ -178,16 +220,20 @@ def recent_predictions(limit: int = 20):
 @app.get("/model-info")
 def model_info():
     return {
-        "base_models":  ["Logistic Regression", "XGBoost (Optuna)", "Neural Network (PyTorch)"],
-        "ensemble":     "OOF Stacking with XGBoost meta-learner",
-        "recommender":  "LinUCB Contextual Bandit (6 context features, 8 actions)",
-        "segments":     ["Cold", "Warm", "Hot", "Convert"],
-        "dataset":      "UCI Online Shoppers Intention (12,330 sessions)",
-        "features":     24,
+        "base_models":    ["Logistic Regression", "XGBoost (Optuna)", "Neural Network (PyTorch)"],
+        "ensemble":       "OOF Stacking with XGBoost meta-learner",
+        "recommender":    "LinUCB Contextual Bandit (6 context features, 8 actions)",
+        "segments":       ["Cold", "Warm", "Hot", "Convert"],
+        "dataset":        "UCI Online Shoppers Intention (12,330 sessions)",
+        "features":       24,
+        "models_loaded":  "ensemble" in models_loaded,
     }
 
 
-# Serve React frontend — must be after all API routes
+# ------------------------------------------------------------------
+# Serve React frontend — must come AFTER all API routes
+# ------------------------------------------------------------------
+
 if FRONTEND_DIR.exists():
     app.mount(
         "/assets",
@@ -201,6 +247,11 @@ if FRONTEND_DIR.exists():
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
+        """
+        Catch-all for React Router.
+        Returns index.html for any path not matched by an API route,
+        so React handles client-side routing.
+        """
         file_path = FRONTEND_DIR / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
