@@ -37,3 +37,7 @@ reports/*.json
 .idea/
 .DS_Store
 Thumbs.db
+
+*.png
+*.jpg
+notebooks/
