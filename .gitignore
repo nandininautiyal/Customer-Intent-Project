@@ -17,6 +17,8 @@ dist-ssr/
 
 # Environment
 .env
+!frontend/.env.development
+!frontend/.env.production
 
 # Data
 data/raw/
