@@ -3,7 +3,7 @@ title: Customer Intent Engine
 emoji: 🧠
 colorFrom: blue
 colorTo: purple
-sdk: static
+sdk: docker
 pinned: false
 ---
 
