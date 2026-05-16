@@ -3,6 +3,8 @@ import joblib
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from loguru import logger
 from pathlib import Path
 
@@ -22,22 +24,16 @@ app = FastAPI(
 )
 
 
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    
-    os.getenv("FRONTEND_URL", ""),
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o for o in ALLOWED_ORIGINS if o],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-ARTIFACTS = Path("reports/artifacts")
+ARTIFACTS    = Path("reports/artifacts")
+FRONTEND_DIR = Path("frontend/dist")
 models_loaded = {}
 prediction_log = []
 
@@ -82,6 +78,8 @@ def load_models():
     except Exception as e:
         logger.error(f"Model loading failed: {e}")
         raise
+
+
 
 
 @app.get("/health")
@@ -190,3 +188,29 @@ def model_info():
         "dataset":      "UCI Online Shoppers Intention (12,330 sessions)",
         "features":     24,
     }
+
+
+
+
+if FRONTEND_DIR.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_DIR / "assets")),
+        name="assets"
+    )
+
+    @app.get("/")
+    def serve_frontend():
+        return FileResponse(str(FRONTEND_DIR / "index.html"))
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        """
+        Catch-all route for React Router.
+        Any path that isn't an API route returns index.html
+        so React handles the routing client-side.
+        """
+        file_path = FRONTEND_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(FRONTEND_DIR / "index.html"))

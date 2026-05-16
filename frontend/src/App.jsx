@@ -6,9 +6,8 @@ import { Brain } from 'lucide-react'
 
 const NAV = ['Predict', 'Dashboard']
 
-// In production this points to your Render URL
-// In development it points to localhost
-export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+export const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
 export default function App() {
   const [tab, setTab]         = useState('Predict')

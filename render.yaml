@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: customer-intent-api
+    name: customer-intent-engine
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: bash start.sh
