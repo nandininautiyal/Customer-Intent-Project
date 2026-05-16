@@ -1,5 +1,6 @@
 import numpy as np
 import joblib
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -20,10 +21,17 @@ app = FastAPI(
     version="3.0.0"
 )
 
-# CORS — allows the React frontend to call this API
+
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    
+    os.getenv("FRONTEND_URL", ""),
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[o for o in ALLOWED_ORIGINS if o],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,7 +39,7 @@ app.add_middleware(
 
 ARTIFACTS = Path("reports/artifacts")
 models_loaded = {}
-prediction_log = []     # in-memory log (replace with Postgres in production)
+prediction_log = []
 
 
 @app.on_event("startup")
@@ -53,7 +61,6 @@ def load_models():
         ensemble = EnsembleIntentModel([logistic, xgb, neural])
         ensemble.load(str(ARTIFACTS / "ensemble_meta.pkl"))
 
-        # Load or initialise bandit
         bandit_path = ARTIFACTS / "bandit.pkl"
         bandit = ContextualBandit(n_features=6, alpha=1.0)
         if bandit_path.exists():
@@ -105,7 +112,7 @@ def predict(session: SessionInput):
         session.ExitBounceRisk
     ]])
 
-    scaler  = models_loaded["scaler"]
+    scaler   = models_loaded["scaler"]
     X_scaled = scaler.transform(feature_array)
 
     ensemble = models_loaded["ensemble"]
@@ -119,27 +126,25 @@ def predict(session: SessionInput):
     )
 
     session_context = {
-        "ExitBounceRisk":    session.ExitBounceRisk,
-        "PageValues":        session.PageValues,
-        "ProductPageRatio":  session.ProductPageRatio,
-        "VisitorType":       session.VisitorType,
-        "AvgTimePerPage":    session.AvgTimePerPage,
-        "NearSpecialDay":    session.NearSpecialDay,
+        "ExitBounceRisk":   session.ExitBounceRisk,
+        "PageValues":       session.PageValues,
+        "ProductPageRatio": session.ProductPageRatio,
+        "VisitorType":      session.VisitorType,
+        "AvgTimePerPage":   session.AvgTimePerPage,
+        "NearSpecialDay":   session.NearSpecialDay,
     }
 
     recommender = models_loaded["recommender"]
     rec = recommender.recommend(proba, session_context)
 
-    # Save bandit state after every prediction so learning persists
     bandit = models_loaded["bandit"]
     bandit.save(str(ARTIFACTS / "bandit.pkl"))
 
-    # Log prediction (swap for DB insert in production)
     prediction_log.append({
-        "probability":  proba,
+        "probability":   proba,
         "will_purchase": bool(pred),
-        "segment":      rec["segment"],
-        "action":       rec["recommended_action"],
+        "segment":       rec["segment"],
+        "action":        rec["recommended_action"],
     })
 
     return PredictionResponse(
@@ -152,7 +157,6 @@ def predict(session: SessionInput):
 
 @app.get("/bandit-stats", response_model=BanditStatsResponse)
 def bandit_stats():
-    """Returns what the bandit has learned — which actions it favours and why."""
     if "bandit" not in models_loaded:
         raise HTTPException(status_code=503, detail="Bandit not loaded.")
     bandit = models_loaded["bandit"]
@@ -180,7 +184,7 @@ def recent_predictions(limit: int = 20):
 def model_info():
     return {
         "base_models":  ["Logistic Regression", "XGBoost (Optuna)", "Neural Network (PyTorch)"],
-        "ensemble":     "OOF Stacking with Logistic meta-learner",
+        "ensemble":     "OOF Stacking with XGBoost meta-learner",
         "recommender":  "LinUCB Contextual Bandit (6 context features, 8 actions)",
         "segments":     ["Cold", "Warm", "Hot", "Convert"],
         "dataset":      "UCI Online Shoppers Intention (12,330 sessions)",

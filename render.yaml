@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: customer-intent-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+    disk:
+      name: model-artifacts
+      mountPath: /opt/render/project/src/reports
+      sizeGB: 1

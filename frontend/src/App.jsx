@@ -2,18 +2,22 @@ import React, { useState, useEffect } from 'react'
 import PredictForm from './components/PredictForm'
 import ResultCard from './components/ResultCard'
 import MetricsDashboard from './components/MetricsDashboard'
-import { Activity, Brain, BarChart3 } from 'lucide-react'
+import { Brain } from 'lucide-react'
 
 const NAV = ['Predict', 'Dashboard']
 
+// In production this points to your Render URL
+// In development it points to localhost
+export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 export default function App() {
-  const [tab, setTab]       = useState('Predict')
-  const [result, setResult] = useState(null)
+  const [tab, setTab]         = useState('Predict')
+  const [result, setResult]   = useState(null)
   const [loading, setLoading] = useState(false)
   const [apiStatus, setApiStatus] = useState(null)
 
   useEffect(() => {
-    fetch('http://localhost:8000/health')
+    fetch(`${API_BASE}/health`)
       .then(r => r.json())
       .then(d => setApiStatus(d.status === 'ok' ? 'live' : 'error'))
       .catch(() => setApiStatus('error'))
@@ -23,7 +27,7 @@ export default function App() {
     setLoading(true)
     setResult(null)
     try {
-      const res = await fetch('http://localhost:8000/predict', {
+      const res = await fetch(`${API_BASE}/predict`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
@@ -94,12 +98,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Hero */}
-      <div style={{
-        padding: '3rem 2rem 2rem',
-        maxWidth: '1100px',
-        margin: '0 auto',
-      }}>
+      {/* Main content */}
+      <div style={{ padding: '3rem 2rem 2rem', maxWidth: '1100px', margin: '0 auto' }}>
         {tab === 'Predict' && (
           <>
             <div style={{ marginBottom: '2.5rem' }}>

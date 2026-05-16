@@ -1,20 +1,30 @@
-pandas==2.1.4
+# Core ML
+pandas==2.2.2
 numpy==1.26.4
 scikit-learn==1.4.2
 xgboost==2.0.3
-imbalanced-learn==0.12.3
-torch==2.2.2
+torch==2.3.0
+shap==0.45.0
 optuna==3.6.1
-shap==0.45.1
-loguru==0.7.2
+imbalanced-learn==0.12.2
+
+# API
 fastapi==0.111.0
 uvicorn==0.29.0
+gunicorn==21.2.0
 pydantic==2.7.1
-streamlit==1.35.0
-plotly==5.22.0
+
+# Reporting
 matplotlib==3.8.4
 seaborn==0.13.2
-pyyaml==6.0.1
-joblib==1.4.2
+plotly==5.22.0
+kaleido==0.2.1
+
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.30
+
+# Utilities
 python-dotenv==1.0.1
-imbalanced-learn==0.12.2
+loguru==0.7.2
+joblib==1.4.2

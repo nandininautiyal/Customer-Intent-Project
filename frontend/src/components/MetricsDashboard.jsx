@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { API_BASE } from '../App'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -38,9 +39,16 @@ export default function MetricsDashboard() {
   const [activeMetric, setActiveMetric] = useState('auc')
 
   useEffect(() => {
-    fetch('http://localhost:8000/bandit-stats').then(r => r.json()).then(setBanditStats).catch(() => {})
-    fetch('http://localhost:8000/segment-stats').then(r => r.json()).then(d => setSegStats(d.segment_distribution)).catch(() => {})
-  }, [])
+    fetch(`${API_BASE}/bandit-stats`)
+      .then(r => r.json())
+      .then(setBanditStats)
+      .catch(() => {})
+
+    fetch(`${API_BASE}/segment-stats`)
+      .then(r => r.json())
+      .then(d => setSegStats(d.segment_distribution))
+      .catch(() => {})
+}, [])
 
   const radarData = ['auc', 'f1', 'precision', 'recall', 'lift'].map(k => ({
     metric: k.toUpperCase(),
