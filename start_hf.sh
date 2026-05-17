@@ -2,18 +2,20 @@
 
 echo "=== Customer Intent Engine — Hugging Face Startup ==="
 
-# Run pipeline only if artifacts don't exist
-if [ ! -f "reports/artifacts/ensemble_meta.pkl" ]; then
+echo "Current directory: $(pwd)"
+echo "Contents of reports/artifacts:"
+ls -la reports/artifacts/ 2>/dev/null || echo "Directory not found"
+
+if [ -f "reports/artifacts/ensemble_meta.pkl" ]; then
+    echo "Artifacts found. Skipping training."
+else
+    echo "No artifacts found. Checking dataset..."
     if [ -f "data/raw/online_shoppers_intention.csv" ]; then
         echo "Dataset found. Running training pipeline..."
         python orchestrator.py
     else
-        echo "WARNING: Dataset not found at data/raw/online_shoppers_intention.csv"
-        echo "Skipping training. API will start but /predict will return 503."
-        echo "Upload the dataset and rebuild to enable predictions."
+        echo "WARNING: Dataset not found. API will start without models."
     fi
-else
-    echo "Artifacts found. Skipping training."
 fi
 
 echo "Starting FastAPI server on port 7860..."
