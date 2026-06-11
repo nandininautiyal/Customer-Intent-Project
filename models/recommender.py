@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 from loguru import logger
-from pipeline.segments import assign_segment, SEGMENT_STRATEGY
+from pipeline.segments import assign_segment, SEGMENT_STRATEGY, get_allowed_actions
 
 
 ACTION_LABELS = {
@@ -21,12 +21,10 @@ ACTION_LABELS = {
 # ---------------------------------------------------------------------------
 
 def _exit_risk_level(features: dict) -> tuple[str, float]:
-    """Returns a (label, value) for the dominant exit/bounce signal."""
     exit_bounce = features.get("ExitBounceRisk", 0.0)
     exit_rate   = features.get("ExitRate", 0.0)
     bounce_rate = features.get("BounceRate", 0.0)
     dominant    = max(exit_bounce, exit_rate, bounce_rate)
-
     if dominant >= 0.40:
         return "high", dominant
     if dominant >= 0.15:
@@ -35,7 +33,6 @@ def _exit_risk_level(features: dict) -> tuple[str, float]:
 
 
 def _engagement_level(features: dict) -> tuple[str, float]:
-    """Returns (label, page_value_score) summarising on-site engagement."""
     pv = features.get("PageValues", features.get("PageValue", 0.0))
     if pv >= 150:
         return "high", pv
@@ -45,7 +42,6 @@ def _engagement_level(features: dict) -> tuple[str, float]:
 
 
 def _product_focus(features: dict) -> tuple[str, float]:
-    """Returns (label, ratio) for how product-focused the session is."""
     ratio = features.get("ProductPageRatio", 0.0)
     if ratio >= 0.70:
         return "focused", ratio
@@ -58,7 +54,6 @@ def _is_returning(features: dict) -> bool:
     vtype = features.get("VisitorType", "")
     if isinstance(vtype, str):
         return vtype.lower() == "returning_visitor"
-    # encoded: 1 = returning in most pipelines
     return int(vtype) == 1
 
 
@@ -68,8 +63,6 @@ def _near_special_day(features: dict) -> bool:
 
 # ---------------------------------------------------------------------------
 # Per-action explanation builders
-# Each receives (probability, session_features) and returns a plain-English
-# string that is factually grounded in the actual feature values.
 # ---------------------------------------------------------------------------
 
 def _explain_show_social_proof(prob: float, f: dict) -> str:
@@ -113,7 +106,6 @@ def _explain_show_checkout_prompt(prob: float, f: dict) -> str:
 def _explain_show_exit_intent_offer(prob: float, f: dict) -> str:
     risk_label, risk_val = _exit_risk_level(f)
     lines = []
-
     if risk_label == "high":
         lines.append(
             f"Exit-bounce risk is elevated ({risk_val:.2f}) — the visitor shows strong abandonment signals."
@@ -125,7 +117,6 @@ def _explain_show_exit_intent_offer(prob: float, f: dict) -> str:
         )
         lines.append("A timely offer can retain attention and recover the session.")
     else:
-        # Low exit risk — explain why the bandit still chose this action
         lines.append(
             f"Exit-bounce risk is currently low ({risk_val:.2f}), "
             f"but purchase probability ({prob:.0%}) and session context "
@@ -183,10 +174,6 @@ def _explain_show_product_recommendation(prob: float, f: dict) -> str:
     return " ".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Dispatch table — maps action key → builder function
-# ---------------------------------------------------------------------------
-
 _EXPLANATION_BUILDERS = {
     "show_social_proof":             _explain_show_social_proof,
     "show_discount":                 _explain_show_discount,
@@ -201,11 +188,8 @@ _EXPLANATION_BUILDERS = {
 
 def build_explanation(action: str, probability: float, session_features: dict) -> str:
     """
-    Return a truthful, signal-grounded explanation for why *action* was
+    Returns a truthful, signal-grounded explanation for why *action* was
     selected for this specific session.
-
-    Falls back to a generic probability statement if no builder exists
-    (e.g., for custom actions added later).
     """
     builder = _EXPLANATION_BUILDERS.get(action)
     if builder is None:
@@ -233,43 +217,49 @@ class IntentRecommender:
     for the API layer.
 
     At inference:
-      1. Bandit selects the best action given session context.
-      2. Bandit updates itself using purchase_probability as a proxy reward.
-      3. Returns action + human-readable label + *dynamic* reason + segment.
+      1. Visitor segment is determined from purchase probability.
+      2. Segment's allowed action set is fetched from segments.py.
+      3. Bandit selects the best action within that constrained set.
+      4. Bandit updates itself using purchase_probability as a proxy reward.
+      5. Returns action + label + dynamic reason + segment.
 
-    The ``reason`` field is generated at inference time from actual session
-    feature values rather than looked up from a static dictionary, so it
-    is always factually consistent with the visitor's signals.
+    The constraint layer (step 2) is the key architectural addition:
+    it prevents the bandit from selecting actions that are business-illogical
+    for the visitor's intent level, while preserving the bandit's ability to
+    learn fine-grained preferences within each segment.
     """
 
     def __init__(self, bandit=None):
         self.bandit = bandit
 
     def recommend(self, probability: float, session_features: dict) -> dict:
-        segment = assign_segment(probability)
+        segment       = assign_segment(probability)
         base_strategy = SEGMENT_STRATEGY[segment]
+        allowed       = get_allowed_actions(segment)
 
         session_context = {**session_features, "purchase_probability": probability}
 
         if self.bandit is not None:
-            action, ucb_score, ctx_vec = self.bandit.select_action(session_context)
-            # Online update: use probability as proxy reward signal.
+            # Pass allowed actions so the bandit only scores valid candidates
+            action, ucb_score, ctx_vec = self.bandit.select_action(
+                session_context,
+                allowed_actions=allowed,
+            )
             self.bandit.update(action, ctx_vec, reward=probability)
         else:
-            # Fallback to rule-based strategy if bandit is not loaded.
-            action = base_strategy["action"]
+            action    = base_strategy["action"]
             ucb_score = 0.0
 
         reason = build_explanation(action, probability, session_features)
 
         return {
-            "segment":              segment,
-            "recommended_action":   action,
-            "action_label":         ACTION_LABELS.get(action, action),
-            "reason":               reason,
-            "urgency":              base_strategy["urgency"],
-            "message":              base_strategy["message"],
-            "confidence_score":     round(float(ucb_score), 4),
+            "segment":            segment,
+            "recommended_action": action,
+            "action_label":       ACTION_LABELS.get(action, action),
+            "reason":             reason,
+            "urgency":            base_strategy["urgency"],
+            "message":            base_strategy["message"],
+            "confidence_score":   round(float(ucb_score), 4),
         }
 
     def batch_recommend(
