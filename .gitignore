@@ -1,4 +1,6 @@
+# =========================
 # Python
+# =========================
 venv/
 __pycache__/
 *.pyc
@@ -6,39 +8,61 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
-dist/
 build/
+dist/
 
+# =========================
 # Node / Frontend
+# =========================
 node_modules/
 .eslintcache
 dist-ssr/
 *.local
 
-# Environment
+# =========================
+# Environment Variables
+# =========================
 .env
 !frontend/.env.development
 !frontend/.env.production
 
+# =========================
 # Data
+# =========================
 data/raw/
 
-# Model Artifacts
+# =========================
+# Large Model Artifacts
+# =========================
 reports/artifacts/*.pkl
 reports/artifacts/*.pth
 
-# Reports & Visualizations
-reports/*.png
-reports/*.csv
-reports/*.json
+# =========================
+# Ignore images everywhere
+# =========================
+*.png
+*.jpg
+*.jpeg
 
-# IDEs & System
+# =========================
+# But KEEP report outputs
+# =========================
+!reports/*.png
+!reports/*.jpg
+!reports/*.jpeg
+!reports/*.csv
+!reports/*.json
+
+# =========================
+# IDE / OS
+# =========================
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-*.png
-*.jpg
+# =========================
+# Misc
+# =========================
 notebooks/
 upload_data.py
