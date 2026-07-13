@@ -64,5 +64,8 @@ Thumbs.db
 # =========================
 # Misc
 # =========================
-notebooks/
+
 upload_data.py
+
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
